@@ -13,6 +13,12 @@ Item {
   readonly property string home: Quickshell.env("HOME")
   readonly property string stateHome: home + "/.local/state"
   readonly property string currentBackgroundLink: stateHome + "/omarchy/current/background"
+  // Optional per-monitor overrides: a JSON object mapping a Wayland output name
+  // (e.g. "DP-4") to an absolute image path. Screens listed here render that
+  // image instead of the shared background; every other screen is unaffected.
+  // A missing or empty file leaves the shared background in place everywhere.
+  readonly property string perMonitorLink: stateHome + "/omarchy/current/backgrounds.json"
+  property var perMonitor: ({})
 
   property string currentBackground: ""
   property string displayedBackground: ""
@@ -32,6 +38,7 @@ Item {
 
   function refreshBackground() {
     if (!readlinkProc.running) readlinkProc.running = true
+    if (!perMonitorProc.running) perMonitorProc.running = true
   }
 
   function setBackground(path, instant) {
@@ -110,7 +117,9 @@ Item {
 
   Process {
     id: bgSwitchProc
-    command: ["bash", "-c", "background=$(omarchy-theme-bg-switcher); [[ -n $background ]] && omarchy-theme-bg-set \"$background\""]
+    // Picks an image and, on multi-monitor setups, asks whether it applies to
+    // this monitor or all of them. See bin/omarchy-theme-bg-switch.
+    command: ["omarchy-theme-bg-switch"]
     onExited: root.refreshBackground()
   }
 
@@ -125,6 +134,28 @@ Item {
     command: ["readlink", "-f", root.currentBackgroundLink]
     stdout: StdioCollector {
       onStreamFinished: root.setBackground(String(text || "").trim(), false)
+    }
+  }
+
+  Process {
+    id: perMonitorProc
+    // `cat` a missing file exits non-zero with empty stdout, which correctly
+    // resolves to no overrides rather than an error.
+    command: ["cat", root.perMonitorLink]
+    stdout: StdioCollector {
+      onStreamFinished: {
+        const raw = String(text || "").trim()
+        if (!raw) {
+          root.perMonitor = ({})
+          return
+        }
+        try {
+          const parsed = JSON.parse(raw)
+          root.perMonitor = (parsed && typeof parsed === "object") ? parsed : ({})
+        } catch (e) {
+          root.perMonitor = ({})
+        }
+      }
     }
   }
 
@@ -184,6 +215,16 @@ Item {
     PanelWindow {
       id: panel
       required property var modelData
+
+      // Per-monitor override for this screen, keyed by its Wayland output name.
+      // Empty string means this screen follows the shared background and its
+      // transitions; a non-empty path renders statically on this screen only.
+      readonly property string overrideBackground: {
+        const map = root.perMonitor
+        const name = modelData ? modelData.name : ""
+        return (map && name && map[name]) ? String(map[name]) : ""
+      }
+      readonly property bool hasOverride: overrideBackground !== ""
 
       screen: modelData
       visible: !remapGuard.remapping
@@ -299,6 +340,22 @@ Item {
             PathLine { x: revealMask.centerTop - revealMask.spread; y: 0 }
           }
         }
+      }
+
+      // Per-monitor override drawn on top of the shared background. The shared
+      // layers below keep running their transitions (so displayedBackground
+      // still advances even when every screen is overridden); this simply
+      // covers them on the screens that opt out of the shared wallpaper.
+      Image {
+        id: overrideFrame
+        anchors.fill: parent
+        visible: panel.hasOverride
+        source: panel.hasOverride ? root.imageUrl(panel.overrideBackground) : ""
+        fillMode: Image.PreserveAspectCrop
+        asynchronous: true
+        cache: true
+        smooth: true
+        mipmap: true
       }
 
       Connections {

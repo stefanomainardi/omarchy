@@ -1,0 +1,36 @@
+#!/bin/bash
+
+# omarchy:summary=Pick a background, then set it on this monitor or all monitors
+# omarchy:group=theme
+# omarchy:name=bg-switch
+
+image=$(omarchy-theme-bg-switcher)
+if [[ -z $image ]]; then
+  exit 0
+fi
+
+monitor_count=$(hyprctl monitors -j | jq 'length')
+
+# With a single monitor there is nothing to scope, so keep the original
+# behavior and set the shared background directly.
+if (( monitor_count <= 1 )); then
+  omarchy-theme-bg-set --all "$image"
+  exit 0
+fi
+
+focused=$(hyprctl monitors -j | jq -r '.[] | select(.focused) | .name')
+
+# Fall back to the shared background if the focused monitor can't be resolved.
+if [[ -z $focused ]]; then
+  omarchy-theme-bg-set --all "$image"
+  exit 0
+fi
+
+this_monitor="This monitor ($focused)"
+choice=$(omarchy-menu-select "Set background for" "All monitors" "$this_monitor")
+
+if [[ $choice == "$this_monitor" ]]; then
+  omarchy-theme-bg-set --monitor "$focused" "$image"
+elif [[ $choice == "All monitors" ]]; then
+  omarchy-theme-bg-set --all "$image"
+fi
